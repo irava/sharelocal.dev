@@ -29,6 +29,8 @@ const maxBodyBytes = 10 << 20
 
 const defaultBaseURL = "https://on.sharelocal.dev"
 
+var version = "dev"
+
 type registerRequest struct {
 	DeviceKey string `json:"device_key"`
 }
@@ -44,6 +46,15 @@ func main() {
 	}
 
 	portStr := os.Args[1]
+	if portStr == "--help" || portStr == "-h" {
+		printHelp()
+		os.Exit(0)
+	}
+	if portStr == "--version" || portStr == "-v" {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	port, err := parsePort(portStr)
 	if err != nil {
 		printInvalidPort(portStr)
@@ -336,6 +347,11 @@ func parsePort(s string) (int, error) {
 
 func printMissingPort() {
 	fmt.Println("✖ Missing port")
+	fmt.Println("Usage: sharelocal <port>")
+	fmt.Println("Example: sharelocal 3000")
+}
+
+func printHelp() {
 	fmt.Println("Usage: sharelocal <port>")
 	fmt.Println("Example: sharelocal 3000")
 }

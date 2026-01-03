@@ -1,0 +1,27 @@
+{
+  "name": "sharelocal",
+  "version": "0.0.0",
+  "description": "sharelocal: expose localhost via https://on.sharelocal.dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sharelocaldev/sharelocal"
+  },
+  "bin": {
+    "sharelocal": "./bin/sharelocal"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "vendor/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js",
+    "test": "node ./scripts/selftest.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+

@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const { platformBinaryName, vendorBinaryPath } = require("../scripts/platform");
+
+function main() {
+  const binPath = vendorBinaryPath();
+  const res = spawnSync(binPath, process.argv.slice(2), { stdio: "inherit" });
+  if (res.error) {
+    const expected = platformBinaryName();
+    console.error(`sharelocal: missing binary (${expected}). Reinstall the package.`);
+    process.exit(1);
+  }
+  process.exit(res.status ?? 1);
+}
+
+main();
+

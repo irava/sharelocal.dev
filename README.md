@@ -4,16 +4,14 @@ Expose a local web app running on localhost:<port> via a stable public HTTPS URL
 
 ## Quickstart
 
-Build:
-
 ```bash
-go build -o sharelocal ./cmd/sharelocal
+npm i -g sharelocal
 ```
 
 Run (make sure your local web app is running first, e.g. on port 3000):
 
 ```bash
-./sharelocal 3000
+sharelocal 3000
 ```
 
 This prints a public link under:
@@ -26,7 +24,12 @@ https://on.sharelocal.dev/p/<tunnelId>
 
 - Fresh install: run `sharelocal 3000` with no environment variables set.
 - Output URL uses `https://on.sharelocal.dev/p/<tunnelId>`.
-- Repo-wide search for any infrastructure-provider strings returns no matches.
+
+## Troubleshooting
+
+- Port in use / nothing running: make sure `http://localhost:<port>` works locally first.
+- Firewalls: allow outbound HTTPS and WebSockets.
+- “Can’t reach the sharelocal service”: the hosted backend may be down or blocked on your network.
 
 ## Development (backend)
 
@@ -73,7 +76,7 @@ To point the CLI at a local backend (dev-only):
 
 ```bash
 export SHARELOCAL_BASE_URL='http://localhost:8080'
-./sharelocal 3000
+sharelocal 3000
 ```
 
 ## Verify locally
@@ -93,8 +96,13 @@ go build ./cmd/sharelocal
 2. Run the CLI:
 
 ```bash
-./sharelocal 3000
+sharelocal 3000
 ```
 
 3. Open the printed URL from another device/network.
 4. Stop the CLI and refresh: you should see the offline page.
+
+## Release process (maintainers)
+
+- Tag a release `vX.Y.Z` to publish cross-platform binaries in GitHub Releases.
+- Publish the npm package from [npm/](file:///Users/stefan/Desktop/works/sharelocal/npm) with the matching version.
