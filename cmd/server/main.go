@@ -29,6 +29,8 @@ import (
 
 const maxBodyBytes = 10 << 20
 
+const defaultBaseURL = "https://on.sharelocal.dev"
+
 type registerRequest struct {
 	DeviceKey string `json:"device_key"`
 }
@@ -97,6 +99,9 @@ func main() {
 	}
 
 	baseURL := strings.TrimRight(os.Getenv("BASE_URL"), "/")
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -549,13 +554,6 @@ func writeOfflinePage(w http.ResponseWriter, tunnelID string, baseURL string, r 
 	w.Header().Set("content-type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	canonicalBase := baseURL
-	if canonicalBase == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		canonicalBase = scheme + "://" + r.Host
-	}
 	link := canonicalBase + "/p/" + tunnelID
 	_, _ = io.WriteString(w, "<!doctype html><html><head><meta charset=\"utf-8\"><title>Preview offline</title></head><body><h1>Preview offline</h1><p>This sharelocal link is not currently connected.</p><p><a href=\""+link+"\">"+link+"</a></p></body></html>")
 }

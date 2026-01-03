@@ -27,6 +27,8 @@ import (
 
 const maxBodyBytes = 10 << 20
 
+const defaultBaseURL = "https://on.sharelocal.dev"
+
 type registerRequest struct {
 	DeviceKey string `json:"device_key"`
 }
@@ -55,7 +57,7 @@ func main() {
 
 	baseURL := os.Getenv("SHARELOCAL_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://sharelocal.fly.dev"
+		baseURL = defaultBaseURL
 	}
 
 	configPath, err := sharelocalconfig.DefaultConfigPath()
