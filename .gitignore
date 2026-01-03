@@ -1,0 +1,27 @@
+.DS_Store
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Local binaries (if built with -o in repo root)
+/server
+/sharelocal
+
+# Go workspace
+go.work
+go.work.sum
+
+# Editors
+.idea/
+.vscode/
+
+# Local env / secrets
+.env
+.env.*
+
