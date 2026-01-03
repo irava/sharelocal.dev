@@ -1,14 +1,14 @@
 {
   "name": "sharelocal",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "sharelocal: expose localhost via https://on.sharelocal.dev",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sharelocaldev/sharelocal"
+    "url": "git+https://github.com/sharelocaldev/sharelocal.git"
   },
   "bin": {
-    "sharelocal": "./bin/sharelocal"
+    "sharelocal": "bin/sharelocal"
   },
   "files": [
     "bin/",
@@ -24,4 +24,3 @@
     "node": ">=18"
   }
 }
-
