@@ -1,6 +1,6 @@
 {
   "name": "sharelocal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "sharelocal: expose localhost via https://on.sharelocal.dev",
   "license": "MIT",
   "repository": {
