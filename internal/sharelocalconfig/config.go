@@ -9,8 +9,9 @@ import (
 )
 
 type Config struct {
-	DeviceKey string `json:"device_key"`
-	TunnelID  string `json:"tunnel_id"`
+	DeviceKey   string `json:"device_key"`
+	TunnelID    string `json:"tunnel_id"`
+	SessionKey  string `json:"session_key,omitempty"`
 }
 
 func DefaultConfigPath() (string, error) {

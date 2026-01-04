@@ -47,8 +47,10 @@ func (h Headers) MarshalJSON() ([]byte, error) {
 }
 
 type TunnelHandshake struct {
-	DeviceKey string `json:"device_key"`
-	LocalPort int    `json:"local_port"`
+	DeviceKey   string `json:"device_key"`
+	LocalPort   int    `json:"local_port"`
+	SessionKey  string `json:"session_key"`
+	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
 }
 
 type Envelope struct {

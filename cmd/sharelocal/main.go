@@ -31,6 +31,95 @@ const defaultBaseURL = "https://on.sharelocal.dev"
 
 var version = "dev"
 
+type parsedArgs struct {
+	port           string
+	persistentLink bool
+	ttlSeconds     int
+}
+
+var (
+	errMissingPort  = errors.New("missing port")
+	errUnknownFlag  = errors.New("unknown flag")
+	errShowHelp     = errors.New("show help")
+	errShowVersion  = errors.New("show version")
+)
+
+func parseArgs(args []string) (parsedArgs, error) {
+	if len(args) == 0 {
+		return parsedArgs{}, errMissingPort
+	}
+
+	out := parsedArgs{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--help", "-h":
+			return parsedArgs{}, errShowHelp
+		case "--version", "-v":
+			return parsedArgs{}, errShowVersion
+		case "--persistent-link":
+			out.persistentLink = true
+		case "--ttl":
+			if i+1 >= len(args) {
+				return parsedArgs{}, errUnknownFlag
+			}
+			i++
+			ttlRaw := args[i]
+			seconds, err := parseTTLSeconds(ttlRaw)
+			if err != nil {
+				return parsedArgs{}, err
+			}
+			out.ttlSeconds = seconds
+		default:
+			if strings.HasPrefix(arg, "--ttl=") {
+				ttlRaw := strings.TrimPrefix(arg, "--ttl=")
+				seconds, err := parseTTLSeconds(ttlRaw)
+				if err != nil {
+					return parsedArgs{}, err
+				}
+				out.ttlSeconds = seconds
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return parsedArgs{}, errUnknownFlag
+			}
+			if out.port != "" {
+				return parsedArgs{}, errUnknownFlag
+			}
+			out.port = arg
+		}
+	}
+
+	if out.port == "" {
+		return parsedArgs{}, errMissingPort
+	}
+	return out, nil
+}
+
+func parseTTLSeconds(v string) (int, error) {
+	if v == "" {
+		return 0, nil
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n < 0 {
+			return 0, errors.New("ttl must be non-negative")
+		}
+		return n, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, errors.New("ttl must be positive")
+	}
+	seconds := int(d.Seconds())
+	if seconds < 0 {
+		return 0, errors.New("ttl overflow")
+	}
+	return seconds, nil
+}
+
 type registerRequest struct {
 	DeviceKey string `json:"device_key"`
 }
@@ -40,12 +129,29 @@ type registerResponse struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		printMissingPort()
+	parsed, err := parseArgs(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, errShowHelp) {
+			printHelp()
+			os.Exit(0)
+		}
+		if errors.Is(err, errShowVersion) {
+			fmt.Println(version)
+			os.Exit(0)
+		}
+		if errors.Is(err, errMissingPort) {
+			printMissingPort()
+			os.Exit(2)
+		}
+		if errors.Is(err, errUnknownFlag) {
+			printHelp()
+			os.Exit(2)
+		}
+		printHelp()
 		os.Exit(2)
 	}
 
-	portStr := os.Args[1]
+	portStr := parsed.port
 	if portStr == "--help" || portStr == "-h" {
 		printHelp()
 		os.Exit(0)
@@ -92,6 +198,19 @@ func main() {
 		cfg.DeviceKey = deviceKey
 	}
 
+	sessionKey := cfg.SessionKey
+	if !parsed.persistentLink || strings.TrimSpace(sessionKey) == "" {
+		newSessionKeyValue, err := newSessionKey()
+		if err != nil {
+			printServiceUnreachable()
+			os.Exit(1)
+		}
+		sessionKey = newSessionKeyValue
+		if parsed.persistentLink {
+			cfg.SessionKey = sessionKey
+		}
+	}
+
 	tunnelID, err := register(context.Background(), baseURL, cfg.DeviceKey)
 	if err != nil {
 		printServiceUnreachable()
@@ -104,7 +223,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	publicURL := strings.TrimRight(baseURL, "/") + "/p/" + tunnelID
+	publicURL := strings.TrimRight(baseURL, "/") + "/p/" + tunnelID + "/?k=" + url.QueryEscape(sessionKey)
 
 	fmt.Printf("✔ Sharing localhost:%d\n", port)
 	fmt.Printf("✔ Live URL:\n%s\n\n", publicURL)
@@ -121,14 +240,14 @@ func main() {
 		cancel()
 	}()
 
-	if err := runTunnel(ctx, baseURL, cfg.DeviceKey, port); err != nil {
+	if err := runTunnel(ctx, baseURL, cfg.DeviceKey, port, sessionKey, parsed.ttlSeconds); err != nil {
 		os.Exit(1)
 	}
 }
 
-func runTunnel(ctx context.Context, baseURL, deviceKey string, port int) error {
+func runTunnel(ctx context.Context, baseURL, deviceKey string, port int, sessionKey string, ttlSeconds int) error {
 	for {
-		err := connectAndServe(ctx, baseURL, deviceKey, port, nil)
+		err := connectAndServe(ctx, baseURL, deviceKey, port, sessionKey, ttlSeconds, nil)
 		if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return nil
 		}
@@ -137,7 +256,7 @@ func runTunnel(ctx context.Context, baseURL, deviceKey string, port int) error {
 
 		for attempt := 1; attempt <= 6; attempt++ {
 			onConnected := func() { fmt.Println("✔ Reconnected") }
-			err = connectAndServe(ctx, baseURL, deviceKey, port, onConnected)
+			err = connectAndServe(ctx, baseURL, deviceKey, port, sessionKey, ttlSeconds, onConnected)
 			if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return nil
 			}
@@ -158,7 +277,7 @@ func runTunnel(ctx context.Context, baseURL, deviceKey string, port int) error {
 	}
 }
 
-func connectAndServe(ctx context.Context, baseURL, deviceKey string, port int, onConnected func()) error {
+func connectAndServe(ctx context.Context, baseURL, deviceKey string, port int, sessionKey string, ttlSeconds int, onConnected func()) error {
 	wsURL, err := toWebSocketURL(strings.TrimRight(baseURL, "/") + "/v1/tunnel")
 	if err != nil {
 		return err
@@ -181,7 +300,12 @@ func connectAndServe(ctx context.Context, baseURL, deviceKey string, port int, o
 		return nil
 	})
 
-	handshake := protocol.TunnelHandshake{DeviceKey: deviceKey, LocalPort: port}
+	handshake := protocol.TunnelHandshake{
+		DeviceKey:  deviceKey,
+		LocalPort:  port,
+		SessionKey: sessionKey,
+		TTLSeconds: ttlSeconds,
+	}
 	if err := conn.WriteJSON(handshake); err != nil {
 		return err
 	}
@@ -324,6 +448,14 @@ func newDeviceKey() (string, error) {
 	return base64.RawStdEncoding.EncodeToString(b), nil
 }
 
+func newSessionKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func ensureLocalPortOpen(port int) error {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
@@ -347,13 +479,19 @@ func parsePort(s string) (int, error) {
 
 func printMissingPort() {
 	fmt.Println("✖ Missing port")
-	fmt.Println("Usage: sharelocal <port>")
+	fmt.Println("Usage: sharelocal [--persistent-link] [--ttl <duration|seconds>] <port>")
 	fmt.Println("Example: sharelocal 3000")
 }
 
 func printHelp() {
-	fmt.Println("Usage: sharelocal <port>")
+	fmt.Println("Usage: sharelocal [--persistent-link] [--ttl <duration|seconds>] <port>")
 	fmt.Println("Example: sharelocal 3000")
+	fmt.Println("")
+	fmt.Println("Options:")
+	fmt.Println("  --persistent-link   Reuse the same live URL across runs.")
+	fmt.Println("  --ttl               Optional expiration (e.g. 30m, 2h, 86400).")
+	fmt.Println("  --version, -v       Print version.")
+	fmt.Println("  --help, -h          Show help.")
 }
 
 func printInvalidPort(value string) {

@@ -30,3 +30,5 @@ npm/node_modules/
 
 # npm packs
 npm/*.tgz
+
+RELEASE_0.1.4.md

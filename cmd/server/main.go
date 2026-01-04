@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -31,6 +33,8 @@ const maxBodyBytes = 10 << 20
 
 const defaultBaseURL = "https://on.sharelocal.dev"
 
+const maxSessionKeyTTLSeconds = 7 * 24 * 60 * 60
+
 type registerRequest struct {
 	DeviceKey string `json:"device_key"`
 }
@@ -40,13 +44,15 @@ type registerResponse struct {
 }
 
 type tunnelState struct {
-	tunnelID    string
-	localPort   int
-	conn        *websocket.Conn
-	writeMu     sync.Mutex
-	pendingMu   sync.Mutex
-	pendingByID map[string]chan protocol.Envelope
-	closed      chan struct{}
+	tunnelID            string
+	localPort           int
+	sessionKeyHash      []byte
+	sessionKeyExpiresAt time.Time
+	conn                *websocket.Conn
+	writeMu             sync.Mutex
+	pendingMu           sync.Mutex
+	pendingByID         map[string]chan protocol.Envelope
+	closed              chan struct{}
 }
 
 type activeTunnels struct {
@@ -250,6 +256,25 @@ func handleTunnelWS(w http.ResponseWriter, r *http.Request, db *sql.DB, active *
 		_ = conn.Close()
 		return
 	}
+	if strings.TrimSpace(handshake.SessionKey) == "" {
+		_ = conn.Close()
+		return
+	}
+	if handshake.TTLSeconds < 0 {
+		_ = conn.Close()
+		return
+	}
+	if handshake.TTLSeconds > maxSessionKeyTTLSeconds {
+		handshake.TTLSeconds = maxSessionKeyTTLSeconds
+	}
+
+	expiresAt := time.Time{}
+	if handshake.TTLSeconds > 0 {
+		expiresAt = time.Now().Add(time.Duration(handshake.TTLSeconds) * time.Second)
+	}
+
+	sessionKeyHash := sha256.Sum256([]byte(handshake.SessionKey))
+	sessionKeyHashBytes := sessionKeyHash[:]
 
 	deviceHash := sha256Hex(handshake.DeviceKey)
 	var tunnelID string
@@ -261,11 +286,13 @@ func handleTunnelWS(w http.ResponseWriter, r *http.Request, db *sql.DB, active *
 	_, _ = db.ExecContext(r.Context(), `update devices set last_seen_at = now() where device_key_hash = $1`, deviceHash)
 
 	tunnel := &tunnelState{
-		tunnelID:    tunnelID,
-		localPort:   handshake.LocalPort,
-		conn:        conn,
-		pendingByID: map[string]chan protocol.Envelope{},
-		closed:      make(chan struct{}),
+		tunnelID:            tunnelID,
+		localPort:           handshake.LocalPort,
+		sessionKeyHash:      sessionKeyHashBytes,
+		sessionKeyExpiresAt: expiresAt,
+		conn:                conn,
+		pendingByID:         map[string]chan protocol.Envelope{},
+		closed:              make(chan struct{}),
 	}
 	active.set(tunnelID, tunnel)
 
@@ -350,12 +377,18 @@ func handleIngress(w http.ResponseWriter, r *http.Request, active *activeTunnels
 			http.NotFound(w, r)
 			return
 		}
+		sessionKey, ok := cookieSessionKey(r)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
 
 		path := r.URL.Path
-		if r.URL.RawQuery != "" {
-			path = path + "?" + r.URL.RawQuery
+		filteredQuery := rawQueryWithoutKey(r.URL)
+		if filteredQuery != "" {
+			path = path + "?" + filteredQuery
 		}
-		proxyToTunnel(w, r, active, baseURL, tunnelID, path)
+		proxyToTunnel(w, r, active, baseURL, tunnelID, sessionKey, path)
 		return
 	}
 
@@ -368,20 +401,44 @@ func handleIngress(w http.ResponseWriter, r *http.Request, active *activeTunnels
 	tunnelID := parts[0]
 
 	setTunnelCookie(w, r, tunnelID)
+	sessionKey := r.URL.Query().Get("k")
+	if strings.TrimSpace(sessionKey) != "" {
+		setSessionKeyCookie(w, r, sessionKey)
+	} else {
+		cookieKey, ok := cookieSessionKey(r)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		sessionKey = cookieKey
+	}
+	if len(parts) == 1 {
+		target := "/p/" + tunnelID + "/"
+		if r.URL.RawQuery != "" {
+			target = target + "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+		return
+	}
 	path := "/"
 	if len(parts) == 2 && parts[1] != "" {
 		path = "/" + parts[1]
 	}
-	if r.URL.RawQuery != "" {
-		path = path + "?" + r.URL.RawQuery
+	filteredQuery := rawQueryWithoutKey(r.URL)
+	if filteredQuery != "" {
+		path = path + "?" + filteredQuery
 	}
-	proxyToTunnel(w, r, active, baseURL, tunnelID, path)
+	proxyToTunnel(w, r, active, baseURL, tunnelID, sessionKey, path)
 }
 
-func proxyToTunnel(w http.ResponseWriter, r *http.Request, active *activeTunnels, baseURL string, tunnelID string, path string) {
+func proxyToTunnel(w http.ResponseWriter, r *http.Request, active *activeTunnels, baseURL string, tunnelID string, sessionKey string, path string) {
 	tunnel, ok := active.get(tunnelID)
 	if !ok {
-		writeOfflinePage(w, tunnelID, baseURL, r)
+		writeOfflinePage(w, tunnelID, baseURL, sessionKey, r)
+		return
+	}
+	if !isValidSessionKey(tunnel, sessionKey) {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -405,7 +462,7 @@ func proxyToTunnel(w http.ResponseWriter, r *http.Request, active *activeTunnels
 
 	resp, err := tunnelRoundTrip(r.Context(), tunnel, env)
 	if err != nil {
-		writeOfflinePage(w, tunnelID, baseURL, r)
+		writeOfflinePage(w, tunnelID, baseURL, sessionKey, r)
 		return
 	}
 
@@ -441,6 +498,17 @@ func cookieTunnelID(r *http.Request) (string, bool) {
 	return c.Value, true
 }
 
+func cookieSessionKey(r *http.Request) (string, bool) {
+	c, err := r.Cookie("sharelocal_key")
+	if err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(c.Value) == "" {
+		return "", false
+	}
+	return c.Value, true
+}
+
 func setTunnelCookie(w http.ResponseWriter, r *http.Request, tunnelID string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "sharelocal_tunnel",
@@ -450,6 +518,37 @@ func setTunnelCookie(w http.ResponseWriter, r *http.Request, tunnelID string) {
 		SameSite: http.SameSiteLaxMode,
 		Secure:   r.TLS != nil,
 	})
+}
+
+func setSessionKeyCookie(w http.ResponseWriter, r *http.Request, sessionKey string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sharelocal_key",
+		Value:    sessionKey,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
+}
+
+func rawQueryWithoutKey(u *url.URL) string {
+	q := u.Query()
+	q.Del("k")
+	return q.Encode()
+}
+
+func isValidSessionKey(t *tunnelState, provided string) bool {
+	if strings.TrimSpace(provided) == "" {
+		return false
+	}
+	if !t.sessionKeyExpiresAt.IsZero() && time.Now().After(t.sessionKeyExpiresAt) {
+		return false
+	}
+	sum := sha256.Sum256([]byte(provided))
+	if len(t.sessionKeyHash) != sha256.Size {
+		return false
+	}
+	return subtle.ConstantTimeCompare(t.sessionKeyHash, sum[:]) == 1
 }
 
 func tunnelRoundTrip(ctx context.Context, t *tunnelState, req protocol.Envelope) (protocol.Envelope, error) {
@@ -518,6 +617,7 @@ func copyRequestHeaders(r *http.Request) http.Header {
 		}
 	}
 	out.Del("host")
+	stripSharelocalCookies(r, out)
 
 	xff := clientIP(r)
 	if existing := out.Get("x-forwarded-for"); existing != "" {
@@ -531,6 +631,26 @@ func copyRequestHeaders(r *http.Request) http.Header {
 	}
 	out.Set("x-forwarded-host", r.Host)
 	return out
+}
+
+func stripSharelocalCookies(r *http.Request, headers http.Header) {
+	cookies := r.Cookies()
+	if len(cookies) == 0 {
+		return
+	}
+
+	kept := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c.Name == "sharelocal_tunnel" || c.Name == "sharelocal_key" {
+			continue
+		}
+		kept = append(kept, c.Name+"="+c.Value)
+	}
+	if len(kept) == 0 {
+		headers.Del("cookie")
+		return
+	}
+	headers.Set("cookie", strings.Join(kept, "; "))
 }
 
 func clientIP(r *http.Request) string {
@@ -550,11 +670,14 @@ func isHopByHopHeader(k string) bool {
 	}
 }
 
-func writeOfflinePage(w http.ResponseWriter, tunnelID string, baseURL string, r *http.Request) {
+func writeOfflinePage(w http.ResponseWriter, tunnelID string, baseURL string, sessionKey string, r *http.Request) {
 	w.Header().Set("content-type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	canonicalBase := baseURL
-	link := canonicalBase + "/p/" + tunnelID
+	link := canonicalBase + "/p/" + tunnelID + "/"
+	if strings.TrimSpace(sessionKey) != "" {
+		link = link + "?k=" + url.QueryEscape(sessionKey)
+	}
 	_, _ = io.WriteString(w, "<!doctype html><html><head><meta charset=\"utf-8\"><title>Preview offline</title></head><body><h1>Preview offline</h1><p>This sharelocal link is not currently connected.</p><p><a href=\""+link+"\">"+link+"</a></p></body></html>")
 }
 
