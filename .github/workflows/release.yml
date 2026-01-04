@@ -18,6 +18,19 @@ jobs:
         with:
           go-version: "1.22.x"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Version guard
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          NPM_VERSION="$(node -p \"require('./npm/package.json').version\")"
+          if [ \"${TAG_VERSION}\" != \"${NPM_VERSION}\" ]; then
+            echo \"version mismatch: tag=${TAG_VERSION} npm=${NPM_VERSION}\"
+            exit 1
+          fi
+
       - name: Test
         run: |
           go test ./...

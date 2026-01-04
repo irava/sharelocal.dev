@@ -4,26 +4,23 @@ const { chmodSync } = require("node:fs");
 const crypto = require("node:crypto");
 const { platformBinaryName, vendorBinaryPath } = require("./platform");
 
+const REPO_OWNER = "irava";
+const REPO_NAME = "sharelocal.dev";
+
 function readPackageJson() {
   const pkgPath = path.join(__dirname, "..", "package.json");
   return JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 }
 
-function repositoryBaseURL(pkg) {
-  const repo = pkg.repository;
-  if (typeof repo === "string") {
-    return repo.replace(/\.git$/, "");
+function pkgVersion(pkg) {
+  if (process.env.npm_package_version) {
+    return process.env.npm_package_version;
   }
-  if (repo && typeof repo.url === "string") {
-    return repo.url.replace(/\.git$/, "");
-  }
-  return "https://github.com/sharelocaldev/sharelocal";
+  return pkg.version;
 }
 
-function assetURL(pkg, assetName) {
-  const base = repositoryBaseURL(pkg).replace(/\/+$/, "");
-  const tag = `v${pkg.version}`;
-  return `${base}/releases/download/${tag}/${assetName}`;
+function assetURL(version, assetName) {
+  return `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${version}/${assetName}`;
 }
 
 async function downloadToFile(url, destPath) {
@@ -72,11 +69,12 @@ function expectedSha256FromSums(contents, assetName) {
 
 async function main() {
   const pkg = readPackageJson();
+  const version = pkgVersion(pkg);
   const assetName = platformBinaryName();
-  const url = assetURL(pkg, assetName);
+  const url = assetURL(version, assetName);
 
   const outPath = vendorBinaryPath();
-  const sumsURL = assetURL(pkg, "sha256sums.txt");
+  const sumsURL = assetURL(version, "sha256sums.txt");
 
   if (process.argv.includes("--dry-run")) {
     process.stdout.write(`${url}\n${outPath}\n${sumsURL}\n`);

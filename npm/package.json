@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sharelocaldev/sharelocal.git"
+    "url": "https://github.com/irava/sharelocal.dev"
   },
   "bin": {
     "sharelocal": "bin/sharelocal"

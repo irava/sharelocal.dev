@@ -27,3 +27,6 @@ go.work.sum
 
 # npm package installs
 npm/node_modules/
+
+# npm packs
+npm/*.tgz

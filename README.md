@@ -104,5 +104,24 @@ sharelocal 3000
 
 ## Release process (maintainers)
 
-- Tag a release `vX.Y.Z` to publish cross-platform binaries in GitHub Releases.
-- Publish the npm package from [npm/](file:///Users/stefan/Desktop/works/sharelocal/npm) with the matching version.
+1. Bump [npm/package.json](file:///Users/stefan/Desktop/works/sharelocal/npm/package.json) `version` to `X.Y.Z`.
+2. Create and push a tag:
+
+```bash
+git tag vX.Y.Z
+git push --tags
+```
+
+3. GitHub Actions builds and attaches binaries to the `vX.Y.Z` GitHub Release.
+4. Publish the npm package from [npm/](file:///Users/stefan/Desktop/works/sharelocal/npm):
+
+```bash
+cd npm
+npm publish
+```
+
+Checklist:
+
+- GitHub Release exists for `vX.Y.Z` and includes all OS/arch assets + `sha256sums.txt`.
+- `npm i -g sharelocal@X.Y.Z` installs and downloads from `https://github.com/irava/sharelocal.dev/releases/download/vX.Y.Z/`.
+- `sharelocal --version` prints `X.Y.Z`.
